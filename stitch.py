@@ -26,7 +26,7 @@ def siftimg_rightlignment(img_right, img_left):
     matches = bf.knnMatch(des1, des2, k=2)
     good = []
     for m, n in matches:
-        if m.distance < 0.75 * n.distance:
+        if m.distance < 0.7 * n.distance:
             good.append(m)
     
     if len(good) > 4:
@@ -53,7 +53,7 @@ def siftimg_rightlignment(img_right, img_left):
         t = [-xmin if xmin < 0 else 0, -ymin if ymin < 0 else 0]
         
         # 计算输出图像大小
-        width = xmax - xmin
+        width = max(xmax - xmin, w2)
         height = max(ymax - ymin, h2)
         
         # 更新变换矩阵
@@ -66,6 +66,8 @@ def siftimg_rightlignment(img_right, img_left):
         # 确保坐标有效
         y_offset = t[1]
         x_offset = t[0]
+        print(result.shape)
+        print(t)
         result[y_offset:y_offset+h2, x_offset:x_offset+w2] = img_left
         
         # 裁剪黑边
@@ -122,7 +124,7 @@ def main():
         os.makedirs('output')
     
     # 读取图片
-    images = read_images('images')
+    images = read_images('images11')
     if not images:
         print("未找到任何图片")
         return

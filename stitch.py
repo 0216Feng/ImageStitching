@@ -1,150 +1,178 @@
 import cv2
-import os
 import numpy as np
+import os
+import sys
 
-# 显示图像
-def cvshow(name,img):
-    cv2.imshow(name,img)
-    cv2.waitKey(0)
-    cv2.destroyAllWindows()
+class Matchers:
+    def __init__(self):
+        self.sift = cv2.SIFT_create() 
+        FLANN_INDEX_KDTREE = 1  # 使用 FLANN_INDEX_KDTREE 对应 SIFT
+        index_params = dict(algorithm=FLANN_INDEX_KDTREE, trees=5)
+        search_params = dict(checks=50)
+        self.flann = cv2.FlannBasedMatcher(index_params, search_params)
 
+    def match(self, img1, img2, direction=None):
+        imageSet1 = self.getSIFTFeatures(img1)  
+        imageSet2 = self.getSIFTFeatures(img2) 
+        print("Direction:", direction)
+        
+        matches = self.flann.knnMatch(imageSet2['des'], imageSet1['des'], k=2)
+        good = []
+        for m, n in matches:
+            if m.distance < 0.6 * n.distance:
+                good.append((m.trainIdx, m.queryIdx))
 
-# 全景拼接
-def siftimg_rightlignment(img_right, img_left):
-    """图像拼接"""
-    # 使用新版SIFT
-    sift = cv2.SIFT_create()
-    
-    # 转换为灰度图并提取特征点
-    gray1 = cv2.cvtColor(img_right, cv2.COLOR_BGR2GRAY)
-    gray2 = cv2.cvtColor(img_left, cv2.COLOR_BGR2GRAY)
-    kp1, des1 = sift.detectAndCompute(gray1, None)
-    kp2, des2 = sift.detectAndCompute(gray2, None)
-    
-    # 特征匹配
-    bf = cv2.BFMatcher()
-    matches = bf.knnMatch(des1, des2, k=2)
-    good = []
-    for m, n in matches:
-        if m.distance < 0.7 * n.distance:
-            good.append(m)
-    
-    if len(good) > 4:
-        # 获取匹配点坐标
-        ptsA = np.float32([kp1[m.queryIdx].pt for m in good]).reshape(-1, 1, 2)
-        ptsB = np.float32([kp2[m.trainIdx].pt for m in good]).reshape(-1, 1, 2)
-        
-        # 计算变换矩阵
-        H, status = cv2.findHomography(ptsA, ptsB, cv2.RANSAC, 4.0)
-        
-        # 获取图像尺寸
-        h1, w1 = img_right.shape[:2]
-        h2, w2 = img_left.shape[:2]
-        
-        # 计算变换后的边界
-        corners = np.float32([[0,0], [0,h1], [w1,h1], [w1,0]]).reshape(-1,1,2)
-        transformed_corners = cv2.perspectiveTransform(corners, H)
-        
-        # 计算边界和偏移
-        [xmin, ymin] = np.int32(transformed_corners.min(axis=0).ravel() - 0.5)
-        [xmax, ymax] = np.int32(transformed_corners.max(axis=0).ravel() + 0.5)
-        
-        # 确保偏移量为正
-        t = [-xmin if xmin < 0 else 0, -ymin if ymin < 0 else 0]
-        
-        # 计算输出图像大小
-        width = max(xmax - xmin, w2)
-        height = max(ymax - ymin, h2)
-        
-        # 更新变换矩阵
-        Ht = np.array([[1,0,t[0]], [0,1,t[1]], [0,0,1]])
-        H = Ht.dot(H)
-        
-        # 创建输出图像
-        result = cv2.warpPerspective(img_right, H, (width, height))
-        
-        # 确保坐标有效
-        y_offset = t[1]
-        x_offset = t[0]
-        print(result.shape)
-        print(t)
-        result[y_offset:y_offset+h2, x_offset:x_offset+w2] = img_left
-        
-        # 裁剪黑边
-        gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
-        _, thresh = cv2.threshold(gray, 1, 255, cv2.THRESH_BINARY)
-        contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if contours:
-            x, y, w, h = cv2.boundingRect(contours[0])
-            result = result[y:y+h, x:x+w]
-        
-        return result
-    return None
-    
-def read_images(folder):
-    """读取文件夹中的所有图片"""
-    images = []
-    for filename in sorted(os.listdir(folder)):
-        if filename.lower().endswith(('.png', '.jpg', '.jpeg')):
-            img_path = os.path.join(folder, filename)
-            img = cv2.imread(img_path)
-            if img is not None:
-                images.append(img)
-    return images
+        if len(good) > 4:
+            pointsCurrent = imageSet2['kp']
+            pointsPrevious = imageSet1['kp']
 
-def preprocess_images(images):
-    """调整所有图片为相同大小"""
-    if not images:
-        return []
-    # 以第一张图片的大小为基准
-    height, width = images[0].shape[:2]
-    processed = []
-    for img in images:
-        resized = cv2.resize(img, (width, height))
-        processed.append(resized)
-    return processed
+            matchedPointsCurrent = np.float32([pointsCurrent[i].pt for (_, i) in good])
+            matchedPointsPrev = np.float32([pointsPrevious[i].pt for (i, _) in good])
 
-def stitch_images(images):
-    """拼接多张图片"""
-    if not images:
+            H, _ = cv2.findHomography(matchedPointsCurrent, matchedPointsPrev, cv2.RANSAC, 4)
+            return H
         return None
-    
-    result = images[0]
-    for i in range(1, len(images)):
-        result = siftimg_rightlignment(images[i], result)
-        if result is None:
-            print(f"拼接第 {i} 张图片失败")
-            return None
-    return result
-      
 
-def main():
-    # 创建输出目录
-    if not os.path.exists('output'):
-        os.makedirs('output')
-    
-    # 读取图片
-    images = read_images('images11')
-    if not images:
-        print("未找到任何图片")
-        return
-    
-    # 预处理图片
-    processed_images = preprocess_images(images)
-    
-    # 拼接图片
-    result = stitch_images(processed_images)
-    
-    if result is not None:
-        # 保存结果
-        output_path = os.path.join('output', 'panorama.jpg')
-        cv2.imwrite(output_path, result)
-        print(f"全景图已保存至: {output_path}")
+    def getSIFTFeatures(self, im): 
+        gray = cv2.cvtColor(im, cv2.COLOR_BGR2GRAY)
+        kp, des = self.sift.detectAndCompute(gray, None)
+        return {'kp': kp, 'des': des}
+
+class Stitch:
+    def __init__(self, image_folder):
+        self.images = self.load_images(image_folder)
+        self.count = len(self.images)
+        self.left_list, self.right_list, self.center_im = [], [], None
+        self.matcher_obj = Matchers()
+        self.prepare_lists()
+
+    def load_images(self, folder):
+        filenames = [f for f in os.listdir(folder) if f.endswith(('jpg', 'jpeg', 'png', 'JPG'))]
+        images = [cv2.resize(cv2.imread(os.path.join(folder, f)), (480, 320)) for f in filenames]
+        return images
+
+    def prepare_lists(self):
+        print(f"Number of images: {self.count}")
+        self.centerIdx = self.count // 2
+        print(f"Center index image: {self.centerIdx}")
+        self.center_im = self.images[self.centerIdx]
+        self.left_list = self.images[:self.centerIdx + 1]
+        self.right_list = self.images[self.centerIdx + 1:]
+        print("Image lists prepared")
+
+    def leftshift(self):
+        a = self.left_list[0]
+        for b in self.left_list[1:]:
+            H = self.matcher_obj.match(a, b, 'left')
+            print("Homography is:", H)
+            xh = np.linalg.inv(H)
+            ds = np.dot(xh, np.array([a.shape[1], a.shape[0], 1]))
+            ds = ds / ds[-1]
+            f1 = np.dot(xh, np.array([0, 0, 1]))
+            xh[0][-1] += abs(f1[0])
+            xh[1][-1] += abs(f1[1])
+            ds = np.dot(xh, np.array([a.shape[1], a.shape[0], 1]))
+            offsety = abs(int(f1[1]))
+            offsetx = abs(int(f1[0]))
+            dsize = (int(ds[0]) + offsetx, int(ds[1]) + offsety)
+            print("Image dsize =>", dsize)
+            tmp = cv2.warpPerspective(a, xh, dsize)
+            tmp[offsety:b.shape[0] + offsety, offsetx:b.shape[1] + offsetx] = b
+            a = tmp
+        self.leftImage = tmp
+
+    def rightshift(self):
+        for each in self.right_list:
+            H = self.matcher_obj.match(self.leftImage, each, 'right')
+            print("Homography:", H)
+            h, w = self.leftImage.shape[:2]
+            txyz = np.dot(H, np.array([each.shape[1], each.shape[0], 1]))
+            txyz = txyz / txyz[-1]
+            dsize = (int(txyz[0]) + self.leftImage.shape[1], int(txyz[1]) + self.leftImage.shape[0])
+            tmp = cv2.warpPerspective(each, H, dsize)
+            # 创建新画布
+            new_img = np.zeros((dsize[1], dsize[0], 3), dtype=np.uint8)
+            new_img[:h, :w] = self.leftImage
+            
+            # 融合图像
+            result = self.mix_and_match(new_img, tmp)
+            
+            # 裁剪有效区域
+            gray = cv2.cvtColor(result, cv2.COLOR_BGR2GRAY)
+            _, thresh = cv2.threshold(gray, 1, 255, cv2.THRESH_BINARY)
+            contours, _ = cv2.findContours(thresh, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if contours:
+                x, y, w, h = cv2.boundingRect(max(contours, key=cv2.contourArea))
+                self.leftImage = result[y:y+h, x:x+w]
+            else:
+                self.leftImage = result
+
+    def mix_and_match(self, leftImage, warpedImage):
+        # 创建重叠区域的掩码
+        gray_left = cv2.cvtColor(leftImage, cv2.COLOR_BGR2GRAY)
+        gray_right = cv2.cvtColor(warpedImage, cv2.COLOR_BGR2GRAY)
         
-        # 显示结果
-        cvshow('Final Panorama', result)
-    else:
-        print("图片拼接失败")
+        # 创建掩码
+        _, mask_left = cv2.threshold(gray_left, 1, 255, cv2.THRESH_BINARY)
+        _, mask_right = cv2.threshold(gray_right, 1, 255, cv2.THRESH_BINARY)
+        
+        # 获取重叠区域
+        overlap = cv2.bitwise_and(mask_left, mask_right)
+        
+        # 扩大重叠区域
+        kernel_size = 100  # 增加kernel大小使过渡更平滑
+        kernel = np.ones((kernel_size,kernel_size), np.uint8)
+        overlap_dilated = cv2.dilate(overlap, kernel)
+        
+        # 创建权重图
+        rows, cols = overlap_dilated.shape
+        distances = np.zeros((rows, cols))
+        
+        # 计算到边缘的距离
+        for y in range(rows):
+            for x in range(cols):
+                if overlap_dilated[y,x] > 0:
+                    # 找到最近的非重叠区域边缘
+                    left_edge = x
+                    right_edge = x
+                    for i in range(x, -1, -1):
+                        if overlap_dilated[y,i] == 0:
+                            left_edge = i
+                            break
+                    for i in range(x, cols):
+                        if overlap_dilated[y,i] == 0:
+                            right_edge = i
+                            break
+                    # 计算相对距离作为权重
+                    if right_edge > left_edge:
+                        distances[y,x] = float(x - left_edge) / float(right_edge - left_edge)
+        
+        # 平滑权重图
+        distances = cv2.GaussianBlur(distances, (51,51), 0)
+        
+        # 创建三通道权重
+        weight_right = cv2.merge([distances, distances, distances])
+        weight_left = 1 - weight_right
+        
+        # 应用权重
+        result = leftImage.astype(float) * weight_left + warpedImage.astype(float) * weight_right
+        
+        # 非重叠区域直接拷贝
+        result[mask_left == 0] = warpedImage[mask_left == 0]
+        result[mask_right == 0] = leftImage[mask_right == 0]
+        
+        return result.astype(np.uint8)
 
-if __name__ == "__main__":
-    main()
+    def showImage(self):
+        cv2.imshow("Stitched Image", self.leftImage)
+        cv2.waitKey(0)
+        cv2.destroyAllWindows()
+
+if __name__ == '__main__':
+    image_folder = 'street'  # 指定图片所在的文件夹
+    stitcher = Stitch(image_folder)
+    stitcher.leftshift()
+    stitcher.rightshift()
+    stitcher.showImage()
+    cv2.imwrite("stitched_street.jpg", stitcher.leftImage)
+    print("Stitched image saved as stitched_output.jpg")

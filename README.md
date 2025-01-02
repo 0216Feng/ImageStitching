@@ -50,15 +50,19 @@ A multi-images **Image Stitching** project, it still has many possible improveme
 
 ![](./stitched_room.jpg)
 
-<center> stitched_room.jpg </center>
+<p align="center"> stitched_room.jpg </p>
+
+
 
 ![](stitched_mountain.jpg)
 
-<center> stitched_mountain.jpg </center>
+<p align="center"> stitched_mountain.jpg </p>
+
+
 
 ![](stitched_street.jpg)
 
-<center> stitched_street.jpg </center>
+<p align="center"> stitched_street.jpg </p>
 
 
 
